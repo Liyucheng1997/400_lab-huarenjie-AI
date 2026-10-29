@@ -1,0 +1,33 @@
+# 华人街 AI 助手 · v1.0
+
+网页里填入自己的 Claude API Key，就能用自然语言检索意大利华人街的信息。两个页面：
+
+- **找工作**：招聘 / 求职帖、同行开价、意大利新闻。老板直接问"普拉托有没有在找工作的车工"即可。
+- **找房子**：华人街整租 / 分租 / 买卖帖，加上 Immobiliare.it、Casa.it、Idealista 带好筛选条件（城市、预算、房间数）的搜索链接。
+
+两个页面都能让 AI 写好招聘帖 / 出租帖（一键复制），并给出华人街对应分类的发帖页，登录自己的账号后粘贴发布。
+
+## 运行
+
+```bash
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python server.py
+```
+
+打开 http://127.0.0.1:8000 ，填入 API Key（在 https://console.anthropic.com/settings/keys 创建）。
+想让同一局域网的其他电脑访问：`set HOST=0.0.0.0` 后再启动。
+
+## 工作原理
+
+- `scraper.py`：实时抓取 huarenjiewang.com 意大利站分类广告（按最新发帖翻页，本地按关键词/城市/供求过滤）、帖子详情，以及华人街意大利频道的新闻（新欧洲 xinouzhou.com）。带 10 分钟缓存和并发限制。
+- `server.py`：FastAPI 后端。用 Claude Opus 5.5 + 工具调用：模型自己决定搜什么关键词、看哪些帖子详情，最后汇总作答；另配了只限这几个网站的网页搜索作补充。结果以流式（SSE）推给网页。
+- `static/`：前端页面。API Key 只存在浏览器里，随每次提问发给本机后端转交 Claude，服务器不保存。
+
+## 注意
+
+- 只读取公开页面，被网站打码的电话不会去破解，需到原帖查看。
+- Immobiliare / Casa.it / Idealista 有反爬保护（直接请求返回 403），所以不抓取，只生成筛选链接，并用 Claude 的网页搜索查这些网站被搜索引擎收录的页面。
+- 不自动发帖：发帖需要登录华人街账号，AI 只负责写帖子和给出发帖页。
+- 网站改版后列表解析可能失效，修改 `scraper.parse_listing_page` 即可。
+- 每次提问会消耗 API 额度（检索类问题通常要调用几轮工具）。

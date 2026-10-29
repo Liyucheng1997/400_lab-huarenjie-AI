@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>华人街 AI 助手</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+  <script>
+    try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+  </script>
+</head>
+<body>
+  <div id="app">
+    <header class="titlebar">
+      <div class="logo-mark">华</div>
+      <div class="logo-text">
+        <div class="logo-name">华人街 AI 助手</div>
+        <div class="logo-sub">意大利 · 招工 · 求职 · 新闻</div>
+      </div>
+      <div class="spacer"></div>
+      <div class="seg" id="modeSeg">
+        <button data-mode="jobs" class="active">找工作</button>
+        <button data-mode="house">找房子</button>
+      </div>
+      <div class="spacer"></div>
+      <button class="key-pill" id="keyBtn" title="设置 Claude API Key">
+        <span class="dot" id="keyDot"></span><span id="keyLabel">未设置 API Key</span>
+      </button>
+      <button class="tb-round" id="newChat" title="新对话">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button class="tb-round" id="themeBtn" title="切换深色模式">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </header>
+
+    <main class="scroller" id="scroller">
+      <div class="thread" id="thread">
+        <section class="welcome" id="welcome">
+          <div class="hello" id="hello"></div>
+          <h1 id="headline"></h1>
+          <p class="lead" id="lead"></p>
+
+          <div class="key-card card" id="keyCard">
+            <div class="key-card-title">先填入你的 Claude API Key</div>
+            <div class="key-card-desc">在 <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Claude 控制台</a> 创建。Key 只保存在你的浏览器里，每次提问时发给本机服务转交 Claude，不会存到服务器。</div>
+            <form class="key-form" id="keyForm">
+              <input class="input" id="keyInput" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" />
+              <button class="btn btn-primary" type="submit">保存</button>
+            </form>
+            <label class="form-check"><input type="checkbox" id="keyRemember" checked /> 在这台电脑上记住</label>
+          </div>
+
+          <div class="section-label">试试这样问</div>
+          <div class="examples" id="examples"></div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="composer-wrap">
+      <form class="composer card" id="composer">
+        <textarea id="prompt" rows="1"></textarea>
+        <button class="send" id="sendBtn" type="submit" title="发送">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+      </form>
+      <div class="footnote">数据来自华人街公开页面及 Immobiliare / Casa.it / Idealista 搜索链接，信息可能过期，请以原帖为准 · 模型 Claude Opus 5.5</div>
+    </footer>
+  </div>
+
+  <dialog class="modal" id="keyModal">
+    <form class="modal-body" id="keyModalForm" method="dialog">
+      <div class="key-card-title">Claude API Key</div>
+      <div class="key-card-desc">在 <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Claude 控制台</a> 创建。只保存在你的浏览器里。</div>
+      <input class="input" id="keyModalInput" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" />
+      <label class="form-check"><input type="checkbox" id="keyModalRemember" checked /> 在这台电脑上记住</label>
+      <div class="modal-footer">
+        <button class="btn" type="button" id="keyClear">清除</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" id="keyCancel">取消</button>
+        <button class="btn btn-primary" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast-host" id="toasts"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
