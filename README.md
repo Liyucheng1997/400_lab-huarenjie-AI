@@ -10,6 +10,7 @@
 ## 在线使用
 
 - 在线页面：https://liyucheng1997.github.io/400_lab-huarenjie-AI/ （备用：https://huarenjie.liyucheng.me ）
+- 限制：huarenjiewang.com 拒绝服务器（机房 IP）的访问，在线版读不到华人街实时招聘 / 租房帖，只能用新闻、找房网站链接、发帖页和 Claude 网页搜索。要完整功能请本机运行。
 - 填入自己的 Claude API Key（在 https://console.anthropic.com/settings/keys 创建）即可提问。Key 只保存在你的浏览器里，提问由浏览器直接发给 Claude；服务器只负责读取华人街公开页面，不经手 Key，也不保存对话。
 
 ## 本机运行
