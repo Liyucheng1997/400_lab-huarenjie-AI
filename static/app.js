@@ -1,5 +1,11 @@
-// 华人街 AI 助手前端：API Key 只存在浏览器里，每次提问随请求发给本机服务。
+// 华人街 AI 助手前端：浏览器用访客自己的 API Key 直接调用 Claude，Key 和对话都只在浏览器里。
+// 服务端只做华人街公开页面的抓取中转（/api/tool），不经手 Key，也不保存对话。
+import Anthropic from 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.134.0/+esm';
+
 const $ = (id) => document.getElementById(id);
+// 在 GitHub Pages 上时，抓取接口在 huarenjie.liyucheng.me；本机运行时同源
+const API_BASE = location.hostname.endsWith('github.io') ? 'https://huarenjie.liyucheng.me' : '';
+const MAX_TOOL_ROUNDS = 8;
 const KEY_NAME = 'claude_api_key';
 
 const store = {
@@ -213,6 +219,68 @@ function renderSources(card, items) {
   card.append(det);
 }
 
+let configPromise = null;
+function loadConfig() {
+  configPromise ??= fetch(`${API_BASE}/api/config`).then((r) => {
+    if (!r.ok) throw new Error(`抓取服务出错（${r.status}）`);
+    return r.json();
+  }).catch((err) => { configPromise = null; throw err; });
+  return configPromise;
+}
+
+async function runTool(name, input, signal) {
+  const resp = await fetch(`${API_BASE}/api/tool`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, input }),
+    signal,
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `抓取服务出错（${resp.status}）`);
+  return data.result;
+}
+
+function toolStatus(name, args) {
+  switch (name) {
+    case 'property_search_links':
+      return `正在生成 ${args.city_it || ''} 的 Immobiliare / Casa.it / Idealista 找房链接`;
+    case 'get_post_link': return '正在获取华人街发帖页';
+    case 'search_classifieds': {
+      const parts = [args.city || '全意大利', args.job_type || args.house_type || args.category || '招聘求职'];
+      if (args.post_type) parts.push(args.post_type);
+      if (args.keywords?.length) parts.push('「' + args.keywords.join(' / ') + '」');
+      return '正在检索华人街：' + parts.join(' · ');
+    }
+    case 'get_listing_detail': return `正在查看帖子 #${args.listing_id}`;
+    case 'get_italy_news': return '正在获取意大利新闻';
+    case 'read_article': return '正在阅读文章';
+    default: return `正在调用 ${name}`;
+  }
+}
+
+// 只回传纯文本历史（最近 12 条），保证 user / assistant 交替
+function buildMessages() {
+  const messages = [];
+  for (const turn of history.slice(-12)) {
+    const text = String(turn.content || '').trim();
+    if (!text) continue;
+    const last = messages[messages.length - 1];
+    if (last && last.role === turn.role) last.content += '\n\n' + text;
+    else messages.push({ role: turn.role, content: text });
+  }
+  while (messages.length && messages[0].role !== 'user') messages.shift();
+  return messages;
+}
+
+function errorText(err) {
+  if (err instanceof Anthropic.AuthenticationError) return 'API Key 无效，请检查后重新填写。';
+  if (err instanceof Anthropic.PermissionDeniedError) return '这个 API Key 没有调用该模型的权限。';
+  if (err instanceof Anthropic.RateLimitError) return '请求太频繁或额度不足，请稍后再试。';
+  if (err instanceof Anthropic.APIConnectionError) return '连接不上 Claude API，请检查网络（国内需要能访问 api.anthropic.com）。';
+  if (err instanceof Anthropic.APIError) return `Claude API 错误（${err.status}）：${err.message}`;
+  return err.message || '网络出错，请重试';
+}
+
 async function ask() {
   if (controller) { controller.abort(); return; }
   const text = prompt.value.trim();
@@ -237,6 +305,7 @@ async function ask() {
 
   history.push({ role: 'user', content: text });
   controller = new AbortController();
+  const { signal } = controller;
   setBusy(true);
 
   let full = '';
@@ -251,50 +320,73 @@ async function ask() {
     failed = true;
     card.append(el('div', 'error', message));
   };
+  const showStep = (msg) => {
+    steps.append(el('li', '', msg));
+    status.style.display = '';
+    status.lastChild.textContent = msg;
+    scrollToBottom();
+  };
+  const sources = new Map();
 
   try {
-    const resp = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: apiKey, history, mode }),
-      signal: controller.signal,
-    });
-    if (!resp.ok) {
-      const data = await resp.json().catch(() => ({}));
-      throw new Error(data.error || `服务出错（${resp.status}）`);
-    }
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
-        if (!chunk.startsWith('data: ')) continue;
-        const ev = JSON.parse(chunk.slice(6));
-        if (ev.type === 'delta') {
-          full += ev.text;
-          if (full.trim()) status.style.display = 'none';
-          paint();
-        } else if (ev.type === 'status') {
-          steps.append(el('li', '', ev.text));
-          status.style.display = '';
-          status.lastChild.textContent = ev.text;
-          scrollToBottom();
-        } else if (ev.type === 'sources') {
-          renderSources(card, ev.items || []);
-        } else if (ev.type === 'error') {
-          fail(ev.message);
-          if (/API Key/.test(ev.message)) showKeyCard();
+    const cfg = await loadConfig();
+    const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true, maxRetries: 2 });
+    const today = new Date().toISOString().slice(0, 10);
+    const system = `${cfg.system}\n\n${cfg.mode_hints[mode] || cfg.mode_hints.jobs}今天是 ${today}。`;
+    const messages = buildMessages();
+
+    let round = 0;
+    for (; round < MAX_TOOL_ROUNDS; round++) {
+      const stream = client.beta.messages.stream({
+        model: cfg.model,
+        max_tokens: 32000,
+        system,
+        tools: cfg.tools,
+        messages,
+        thinking: { type: 'adaptive' },
+        output_config: { effort: 'medium' },
+        cache_control: { type: 'ephemeral' },
+        betas: ['server-side-fallback-2026-07-01'],
+        fallbacks: 'default',
+      }, { signal });
+      stream.on('text', (delta) => {
+        full += delta;
+        if (full.trim()) status.style.display = 'none';
+        paint();
+      });
+      stream.on('streamEvent', (ev) => {
+        if (ev.type === 'content_block_start' && ev.content_block.type === 'server_tool_use') showStep('正在网页搜索华人街相关内容');
+      });
+      const response = await stream.finalMessage();
+
+      if (response.stop_reason === 'refusal') { fail('这个问题模型无法回答，请换个问法。'); break; }
+      messages.push({ role: 'assistant', content: response.content });
+      if (response.stop_reason === 'pause_turn') continue;
+      if (response.stop_reason !== 'tool_use') break;
+
+      const results = await Promise.all(response.content.filter((b) => b.type === 'tool_use').map(async (block) => {
+        showStep(toolStatus(block.name, block.input || {}));
+        try {
+          const result = await runTool(block.name, block.input || {}, signal);
+          const found = [...(result.results || []), ...(result.links || []).map((l) => ({ title: `${l.site} 筛选结果`, url: l.url, type: '找房网站' }))];
+          for (const item of found) if (item.url && !sources.has(item.url)) sources.set(item.url, item);
+          return { type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(result) };
+        } catch (err) {
+          if (err.name === 'AbortError') throw err;
+          return { type: 'tool_result', tool_use_id: block.id, content: err.message, is_error: true };
         }
-      }
+      }));
+      messages.push({ role: 'user', content: results });
+      full += '\n\n'; paint();
     }
+    if (round === MAX_TOOL_ROUNDS) { full += '\n\n（检索轮数已达上限，以上为目前找到的结果。）'; paint(); }
+    renderSources(card, [...sources.values()].slice(0, 60));
   } catch (err) {
-    if (err.name === 'AbortError') fail('已停止');
-    else fail(err.message || '网络出错，请重试');
+    if (signal.aborted || err instanceof Anthropic.APIUserAbortError) fail('已停止');
+    else {
+      fail(errorText(err));
+      if (err instanceof Anthropic.AuthenticationError) showKeyCard();
+    }
   } finally {
     status.remove();
     renderMarkdown(answer, full);

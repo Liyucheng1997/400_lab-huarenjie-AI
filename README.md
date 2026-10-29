@@ -7,7 +7,12 @@
 
 两个页面都能让 AI 写好招聘帖 / 出租帖（一键复制），并给出华人街对应分类的发帖页，登录自己的账号后粘贴发布。
 
-## 运行
+## 在线使用
+
+- 在线页面：https://liyucheng1997.github.io/400_lab-huarenjie-AI/ （备用：https://huarenjie.liyucheng.me ）
+- 填入自己的 Claude API Key（在 https://console.anthropic.com/settings/keys 创建）即可提问。Key 只保存在你的浏览器里，提问由浏览器直接发给 Claude；服务器只负责读取华人街公开页面，不经手 Key，也不保存对话。
+
+## 本机运行
 
 ```bash
 python -m venv .venv
@@ -21,8 +26,14 @@ python -m venv .venv
 ## 工作原理
 
 - `scraper.py`：实时抓取 huarenjiewang.com 意大利站分类广告（按最新发帖翻页，本地按关键词/城市/供求过滤）、帖子详情，以及华人街意大利频道的新闻（新欧洲 xinouzhou.com）。带 10 分钟缓存和并发限制。
-- `server.py`：FastAPI 后端。用 Claude Opus 5.5 + 工具调用：模型自己决定搜什么关键词、看哪些帖子详情，最后汇总作答；另配了只限这几个网站的网页搜索作补充。结果以流式（SSE）推给网页。
-- `static/`：前端页面。API Key 只存在浏览器里，随每次提问发给本机后端转交 Claude，服务器不保存。
+- `server.py`：FastAPI 抓取中转。只提供 `/api/config`（系统提示词和工具定义）和 `/api/tool`（执行抓取类工具，按 IP 限流），不调用 Claude、不经手 Key、不存对话。允许跨域的来源由环境变量 `ALLOWED_ORIGINS` 指定。
+- `static/`：前端页面，用 Anthropic 官方 JS SDK 在浏览器里直接调用 Claude Opus 5.5 + 工具调用：模型自己决定搜什么关键词、看哪些帖子详情，最后汇总作答；另配了只限这几个网站的网页搜索作补充。页面放在 GitHub Pages 时，抓取请求发往 `huarenjie.liyucheng.me`，本机运行时发往同源。
+
+## 部署
+
+- `.github/workflows/pages.yml`：推送 main 后把 `static/` 发布到 GitHub Pages。
+- `.github/workflows/deploy-server.yml`：`server.py` / `scraper.py` 等改动后，通过受限 SSH 钥匙让服务器执行 `/usr/local/bin/deploy-huarenjie`（源码 `deploy/deploy-huarenjie.sh`）：拉取最新代码、装依赖、重启 `app-huarenjie` 服务并做健康检查。
+- 服务器上：程序在 `/opt/apps/huarenjie`（systemd 服务 `app-huarenjie`，端口 4400），nginx 反向代理 `huarenjie.liyucheng.me` + certbot HTTPS（`deploy/nginx-huarenjie.conf`）。
 
 ## 注意
 
@@ -30,4 +41,4 @@ python -m venv .venv
 - Immobiliare / Casa.it / Idealista 有反爬保护（直接请求返回 403），所以不抓取，只生成筛选链接，并用 Claude 的网页搜索查这些网站被搜索引擎收录的页面。
 - 不自动发帖：发帖需要登录华人街账号，AI 只负责写帖子和给出发帖页。
 - 网站改版后列表解析可能失效，修改 `scraper.parse_listing_page` 即可。
-- 每次提问会消耗 API 额度（检索类问题通常要调用几轮工具）。
+- 每次提问会消耗访客自己的 API 额度（检索类问题通常要调用几轮工具）。

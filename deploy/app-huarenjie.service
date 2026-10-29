@@ -1,0 +1,14 @@
+[Unit]
+Description=华人街 AI 助手 · 抓取中转
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/apps/huarenjie
+ExecStart=/opt/apps/huarenjie/.venv/bin/uvicorn server:app --host 127.0.0.1 --port 4400 --proxy-headers
+Environment=ALLOWED_ORIGINS=https://liyucheng1997.github.io
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

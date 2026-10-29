@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>华人街 AI 助手</title>
-  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="app.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
   <script>
@@ -45,7 +45,7 @@
 
           <div class="key-card card" id="keyCard">
             <div class="key-card-title">先填入你的 Claude API Key</div>
-            <div class="key-card-desc">在 <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Claude 控制台</a> 创建。Key 只保存在你的浏览器里，每次提问时发给本机服务转交 Claude，不会存到服务器。</div>
+            <div class="key-card-desc">在 <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Claude 控制台</a> 创建。Key 只保存在你的浏览器里，提问由浏览器直接发给 Claude；我们的服务器只帮忙读取华人街公开页面，不经手 Key，也不保存对话。</div>
             <form class="key-form" id="keyForm">
               <input class="input" id="keyInput" type="password" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" />
               <button class="btn btn-primary" type="submit">保存</button>
@@ -66,7 +66,7 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
         </button>
       </form>
-      <div class="footnote">数据来自华人街公开页面及 Immobiliare / Casa.it / Idealista 搜索链接，信息可能过期，请以原帖为准 · 模型 Claude Opus 5.5</div>
+      <div class="footnote">Key 和对话只在你的浏览器里 · 数据来自华人街公开页面及 Immobiliare / Casa.it / Idealista 搜索链接，信息可能过期，请以原帖为准 · 模型 Claude Opus 5.5</div>
     </footer>
   </div>
 
@@ -86,6 +86,6 @@
   </dialog>
 
   <div class="toast-host" id="toasts"></div>
-  <script src="/static/app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

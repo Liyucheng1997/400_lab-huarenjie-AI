@@ -1,35 +1,48 @@
-"""华人街 AI 助手后端：网页填入 Claude API Key，AI 实时检索华人街信息后作答。
+"""华人街 AI 助手服务端：只做华人街公开页面的抓取中转。
+
+浏览器用访客自己的 Claude API Key 直接调用 Claude，服务端不经手 Key，也不保存任何对话；
+它只提供两样东西：/api/config（系统提示词和工具定义）和 /api/tool（执行抓取类工具）。
 
 运行：python server.py  然后打开 http://127.0.0.1:8000
 """
 
 from __future__ import annotations
 
-import json
 import os
-from datetime import date
+import time
+from collections import defaultdict, deque
 from pathlib import Path
 
-import anthropic
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import scraper
 
 MODEL = "claude-opus-5-5"
-MAX_TOOL_ROUNDS = 8
 STATIC = Path(__file__).parent / "static"
+# GitHub Pages 上的页面跨域调用这里；本机运行时页面和接口同源，不需要 CORS
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS", "https://liyucheng1997.github.io,http://127.0.0.1:8000,http://localhost:8000"
+).split(",")
+RATE_LIMIT = int(os.environ.get("RATE_LIMIT", "90"))  # 每个 IP 每分钟最多调用几次工具
 
 app = FastAPI(title="华人街 AI 助手")
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+    max_age=86400,
+)
 
 
 @app.middleware("http")
 async def no_stale_pages(request: Request, call_next):
     # 页面和静态文件每次都向服务器确认，更新后不会看到旧版
     response = await call_next(request)
-    if request.url.path == "/" or request.url.path.startswith("/static"):
+    if not request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -210,164 +223,52 @@ async def run_tool(name: str, args: dict) -> dict:
     raise ValueError(f"未知工具：{name}")
 
 
-def tool_status(name: str, args: dict) -> str:
-    if name == "property_search_links":
-        return f"正在生成 {args.get('city_it', '')} 的 Immobiliare / Casa.it / Idealista 找房链接"
-    if name == "get_post_link":
-        return "正在获取华人街发帖页"
-    if name == "search_classifieds":
-        parts = [
-            args.get("city") or "全意大利",
-            args.get("job_type") or args.get("house_type") or args.get("category") or "招聘求职",
-        ]
-        if args.get("post_type"):
-            parts.append(args["post_type"])
-        if args.get("keywords"):
-            parts.append("「" + " / ".join(args["keywords"]) + "」")
-        return "正在检索华人街：" + " · ".join(parts)
-    if name == "get_listing_detail":
-        return f"正在查看帖子 #{args.get('listing_id')}"
-    if name == "get_italy_news":
-        return "正在获取意大利新闻"
-    if name == "read_article":
-        return "正在阅读文章"
-    return f"正在调用 {name}"
+# 浏览器可以让服务端执行的工具（web_search 是 Claude 的服务端工具，不经过这里）
+LOCAL_TOOLS = {t["name"] for t in TOOLS if "input_schema" in t}
+_calls: dict[str, deque] = defaultdict(deque)
 
 
-def sse(event: dict) -> str:
-    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+def client_ip(request: Request) -> str:
+    return request.headers.get("x-real-ip") or (request.client.host if request.client else "?")
 
 
-def build_messages(history: list[dict]) -> list[dict]:
-    """前端只回传纯文本历史（最近 12 条），保证 user / assistant 交替。"""
-    messages: list[dict] = []
-    for turn in history[-12:]:
-        role, text = turn.get("role"), str(turn.get("content", "")).strip()
-        if role not in ("user", "assistant") or not text:
-            continue
-        if messages and messages[-1]["role"] == role:
-            messages[-1]["content"] += "\n\n" + text
-        else:
-            messages.append({"role": role, "content": text})
-    while messages and messages[0]["role"] != "user":
-        messages.pop(0)
-    return messages
+def rate_limited(ip: str) -> bool:
+    now = time.monotonic()
+    q = _calls[ip]
+    while q and now - q[0] > 60:
+        q.popleft()
+    if len(q) >= RATE_LIMIT:
+        return True
+    q.append(now)
+    return False
 
 
-async def chat_stream(api_key: str, history: list[dict], mode: str):
-    client = anthropic.AsyncAnthropic(api_key=api_key, max_retries=2)
-    messages = build_messages(history)
-    if not messages or messages[-1]["role"] != "user":
-        yield sse({"type": "error", "message": "没有收到问题"})
-        return
-
-    system = SYSTEM + f"\n\n{MODE_HINTS.get(mode, MODE_HINTS['jobs'])}今天是 {date.today().isoformat()}。"
-    sources: dict[str, dict] = {}
-
-    try:
-        for _ in range(MAX_TOOL_ROUNDS):
-            async with client.beta.messages.stream(
-                model=MODEL,
-                max_tokens=32000,
-                system=system,
-                tools=TOOLS,
-                messages=messages,
-                thinking={"type": "adaptive"},
-                output_config={"effort": "medium"},
-                cache_control={"type": "ephemeral"},
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-            ) as stream:
-                async for event in stream:
-                    if event.type == "text":
-                        yield sse({"type": "delta", "text": event.text})
-                    elif event.type == "content_block_start" and event.content_block.type == "server_tool_use":
-                        yield sse({"type": "status", "text": "正在网页搜索华人街相关内容"})
-                response = await stream.get_final_message()
-
-            if response.stop_reason == "refusal":
-                yield sse({"type": "error", "message": "这个问题模型无法回答，请换个问法。"})
-                return
-
-            messages.append({"role": "assistant", "content": response.content})
-
-            if response.stop_reason == "pause_turn":
-                continue
-            if response.stop_reason != "tool_use":
-                break
-
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-                yield sse({"type": "status", "text": tool_status(block.name, block.input)})
-                try:
-                    result = await run_tool(block.name, block.input)
-                    found = result.get("results", []) + [
-                        {"title": f"{link['site']} 筛选结果", "url": link["url"], "type": "找房网站"}
-                        for link in result.get("links", [])
-                    ]
-                    for item in found:
-                        if item.get("url"):
-                            sources.setdefault(item["url"], item)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(result, ensure_ascii=False),
-                    })
-                except Exception as exc:  # 抓取失败交给模型处理
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": f"工具出错：{exc}",
-                        "is_error": True,
-                    })
-            messages.append({"role": "user", "content": tool_results})
-            yield sse({"type": "delta", "text": "\n\n"})
-        else:
-            yield sse({"type": "delta", "text": "\n\n（检索轮数已达上限，以上为目前找到的结果。）"})
-
-        yield sse({"type": "sources", "items": list(sources.values())[:60]})
-        yield sse({"type": "done"})
-
-    except anthropic.AuthenticationError:
-        yield sse({"type": "error", "message": "API Key 无效，请检查后重新填写。"})
-    except anthropic.PermissionDeniedError:
-        yield sse({"type": "error", "message": "这个 API Key 没有调用该模型的权限。"})
-    except anthropic.RateLimitError:
-        yield sse({"type": "error", "message": "请求太频繁或额度不足，请稍后再试。"})
-    except anthropic.APIStatusError as exc:
-        yield sse({"type": "error", "message": f"Claude API 错误（{exc.status_code}）：{exc.message}"})
-    except anthropic.APIConnectionError:
-        yield sse({"type": "error", "message": "连接不上 Claude API，请检查网络（国内需要能访问 api.anthropic.com）。"})
+@app.get("/api/config")
+async def config():
+    return {"model": MODEL, "system": SYSTEM, "mode_hints": MODE_HINTS, "tools": TOOLS}
 
 
-@app.get("/")
-async def index():
-    return FileResponse(STATIC / "index.html")
-
-
-@app.post("/api/chat")
-async def chat(request: Request):
+@app.post("/api/tool")
+async def tool(request: Request):
+    if rate_limited(client_ip(request)):
+        return JSONResponse({"error": "请求太频繁，请稍后再试"}, status_code=429)
     body = await request.json()
-    api_key = (body.get("api_key") or "").strip()
-    if not api_key.startswith("sk-ant-"):
-        return JSONResponse({"error": "请先填写有效的 Claude API Key（以 sk-ant- 开头）"}, status_code=400)
-    return StreamingResponse(
-        chat_stream(api_key, body.get("history") or [], body.get("mode") or "jobs"),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    name, args = body.get("name"), body.get("input") or {}
+    if name not in LOCAL_TOOLS or not isinstance(args, dict):
+        return JSONResponse({"error": f"未知工具：{name}"}, status_code=400)
+    try:
+        return {"result": await run_tool(name, args)}
+    except Exception as exc:  # 抓取失败交给模型处理
+        return JSONResponse({"error": f"工具出错：{exc}"}, status_code=502)
 
 
-@app.get("/api/meta")
-async def meta():
-    return {
-        "model": MODEL,
-        "categories": list(scraper.CATEGORIES),
-        "job_types": JOB_TYPES,
-        "cities": list(scraper.CITY_AREAS),
-    }
+@app.get("/api/health")
+async def health():
+    return {"ok": True}
+
+
+# 放在所有 /api 路由之后：其余路径都是静态页面
+app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
 
 
 if __name__ == "__main__":
